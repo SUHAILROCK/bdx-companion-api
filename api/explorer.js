@@ -18,6 +18,25 @@ function formatKB(bytes) {
 }
 
 export default async function handler(req, res) {
+  // CORS — only allow Chrome extensions
+  const origin = req.headers.origin || '';
+  if (origin.startsWith('chrome-extension://')) {
+    res.setHeader('Access-Control-Allow-Origin', origin);
+  }
+  res.setHeader('Access-Control-Allow-Headers', 'x-api-key');
+  res.setHeader('Cache-Control', 's-maxage=30, stale-while-revalidate=60');
+
+  // Handle preflight
+  if (req.method === 'OPTIONS') {
+    return res.status(204).end();
+  }
+
+  // API key check
+  const key = req.headers['x-api-key'];
+  if (!key || key !== process.env.BDX_API_KEY) {
+    return res.status(403).json({ ok: false, error: 'Forbidden' });
+  }
+
   try {
     const [netInfo, emission, stats, mnStats] = await Promise.all([
       grab('networkinfo'),
@@ -26,10 +45,15 @@ export default async function handler(req, res) {
       grab('master_node_stats'),
     ]);
 
-    const ni = netInfo.data;
-    const em = emission.data;
-    const st = stats.data;
-    const mn = mnStats.data;
+    // Validate API responses
+    const ni = netInfo?.data;
+    const em = emission?.data;
+    const st = stats?.data;
+    const mn = mnStats?.data;
+
+    if (!ni || !em || !st || !mn) {
+      return res.status(502).json({ ok: false, error: 'Upstream data unavailable' });
+    }
 
     // Atomic units → BDX (1 BDX = 1e9 atomic)
     const circulatingSupply = em.circulating_supply / 1e9;
@@ -61,6 +85,7 @@ export default async function handler(req, res) {
 
     res.status(200).json({ ok: true, data });
   } catch (e) {
-    res.status(500).json({ ok: false, error: e.message });
+    console.error('[explorer] Error:', e.message);
+    res.status(500).json({ ok: false, error: 'Internal server error' });
   }
 }
